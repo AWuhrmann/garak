@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Union, Optional, Tuple
 
+from garak.attempt import Conversation
 import torch
 import numpy as np
 
@@ -34,7 +35,11 @@ def _format_chat(generator: Generator, prompt: str):
 def _evaluate(generator, prompt, candidate):
     candidate_str = generator.tokenizer.decode(candidate)
     input_str = prompt + candidate_str
-    outputs = generator.generate(input_str)
+    conv = Conversation.from_openai([
+        {"role": "user", "content": {"text": input_str}}
+    ])
+    
+    outputs = generator.generate(conv)
     result = _check_jailbreak(outputs)
     return result, outputs[0]
 
@@ -44,7 +49,11 @@ def _evaluate_target(generator, prompt, candidate, target):
     result = False
     candidate_str = generator.tokenizer.decode(candidate)
     input_str = prompt + candidate_str
-    outputs = generator.generate(input_str)
+    conv = Conversation.from_openai([
+        {"role": "user", "content": {"text": input_str}}
+    ])
+    
+    outputs = generator.generate(conv)
     for output in outputs:
         if target in output:
             result = True
