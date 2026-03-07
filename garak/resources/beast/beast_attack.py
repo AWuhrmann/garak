@@ -233,7 +233,7 @@ def _get_best_candidate(
         best_score: The best score
     """
     best_suffix = ""
-    best_score = np.Inf
+    best_score = float("inf")
 
     beams = [[sample] for sample in _sample_tokens(generator, prompt, k1, suffix_ids)]
     for i in tqdm(range(suffix_len), leave=False):
