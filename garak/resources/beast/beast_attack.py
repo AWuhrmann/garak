@@ -91,6 +91,7 @@ def _get_perplexity(
             torch.exp(logs / (len(input_tokens[0]) - len(target_tokens[0])))
             .detach()
             .cpu()
+            .float()
             .numpy(),
             output.logits,
         )
@@ -99,6 +100,7 @@ def _get_perplexity(
             torch.exp(logs / (len(input_tokens[0]) - len(target_tokens[0])))
             .detach()
             .cpu()
+            .float()
             .numpy()
         )
 
@@ -200,7 +202,7 @@ def _sample_tokens(
     output = generator.model(input_ids)
     logits = output.logits[:, -1, :]
     temp = generator.generation_config.temperature
-    probs = torch.softmax(logits / temp, dim=-1)
+    probs = torch.softmax(logits / temp, dim=-1).float()
     tokens = torch.multinomial(probs, k, replacement=False)
     return tokens[0].tolist()
 
