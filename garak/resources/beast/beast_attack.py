@@ -11,7 +11,6 @@ import numpy as np
 
 import garak._config
 from garak.attempt import Conversation
-from garak.generators import Generator
 from garak.resources.common import REJECTION_STRINGS, load_advbench
 from tqdm import tqdm
 
