@@ -267,7 +267,7 @@ class BeastAttack:
             best_score: The best score
         """
         best_suffix = ""
-        best_score = float("inf")
+        best_score = -float("inf")
 
         beams = [[sample] for sample in self._sample_tokens(prompt, k1, suffix_ids)]
         for i in tqdm(range(suffix_len), leave=False):
@@ -285,7 +285,7 @@ class BeastAttack:
             best_candidate = candidates[sorted_scores[0]]
             candidate_score = scores[sorted_scores[0]]
 
-            if candidate_score < best_score:
+            if candidate_score > best_score:
                 best_score = candidate_score
                 best_suffix = best_candidate
 
