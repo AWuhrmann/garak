@@ -44,7 +44,7 @@ class BeastAttack:
         Parameters
         ----------
         generator: garak.generator.Generator
-            The generator to be used -- only local generators are supported for GCG.
+            The generator to be used -- only local generators are supported for BEAST.
         """
         
         from garak.generators.huggingface import Pipeline, Model
