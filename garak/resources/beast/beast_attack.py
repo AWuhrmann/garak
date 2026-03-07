@@ -60,9 +60,9 @@ class BeastAttack:
         else:
             raise TypeError(f"Expected Pipeline or Model but got {type(generator)}")
         
-        if not hasattr(self.generator.tokenizer, "apply_chat_template"):
+        if not hasattr(self.model.tokenizer, "apply_chat_template"):
             raise ValueError(
-                f"{self.generator.name} tokenizer does not have a chat template to apply."
+                f"{self.model.name} tokenizer does not have a chat template to apply."
             )
 
         self.generate = generator.generate
@@ -72,31 +72,31 @@ class BeastAttack:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
-        formatted_prompt = self.generator.tokenizer.apply_chat_template(chat, tokenize=False)
+        formatted_prompt = self.model.tokenizer.apply_chat_template(chat, tokenize=False)
         return formatted_prompt
 
     @torch.no_grad()
     def _evaluate(self, prompt, candidate):
-        candidate_str = self.generator.tokenizer.decode(candidate)
+        candidate_str = self.model.tokenizer.decode(candidate)
         input_str = prompt + candidate_str
         conv = Conversation.from_openai([
             {"role": "user", "content": {"text": input_str}}
         ])
         
-        outputs = self.generator.generate(conv)
+        outputs = self.model.generate(conv)
         result = _check_jailbreak(outputs)
         return result, outputs[0]
 
     @torch.no_grad()
     def _evaluate_target(self, prompt, candidate, target):
         result = False
-        candidate_str = self.generator.tokenizer.decode(candidate)
+        candidate_str = self.model.tokenizer.decode(candidate)
         input_str = prompt + candidate_str
         conv = Conversation.from_openai([
             {"role": "user", "content": {"text": input_str}}
         ])
         
-        outputs = self.generator.generate(conv)
+        outputs = self.model.generate(conv)
         for output in outputs:
             if target in output:
                 result = True
@@ -119,7 +119,7 @@ class BeastAttack:
             "output_hidden_states": False,
             "return_dict": True,
         }
-        output = self.generator.model(**kwargs)
+        output = self.model.model(**kwargs)
         softmax = torch.nn.Softmax(dim=-1)
         logs = None
 
@@ -173,18 +173,18 @@ class BeastAttack:
             score: Float score value of adversarial suffix
         """
         if candidate:
-            candidate_str = self.generator.tokenizer.decode(candidate)
+            candidate_str = self.model.tokenizer.decode(candidate)
         else:
             candidate_str = ""
 
         formatted_prompt = self._format_chat(input_str + candidate_str)
-        tokens = self.generator.tokenizer.encode(
+        tokens = self.model.tokenizer.encode(
             formatted_prompt, return_tensors="pt", add_special_tokens=False
-        ).to(self.generator.model.device)
+        ).to(self.model.model.device)
         target = [
-            self.generator.tokenizer.encode(
+            self.model.tokenizer.encode(
                 response_str, return_tensors="pt", add_special_tokens=False
-            ).to(self.generator.model.device)
+            ).to(self.model.model.device)
         ]
         scores = np.zeros(len(tokens))
 
@@ -194,11 +194,11 @@ class BeastAttack:
                 tokens_.append(torch.cat([tokens[j : j + 1], t], dim=1))
             tokens_ = torch.cat(tokens_, dim=0).type(tokens.dtype)
             if tokens.shape == tokens_.shape:
-                bos = self.generator.tokenizer.encode(
-                    self.generator.tokenizer.bos_token,
+                bos = self.model.tokenizer.encode(
+                    self.model.tokenizer.bos_token,
                     return_tensors="pt",
                     add_special_tokens=False,
-                ).to(self.generator.model.device)
+                ).to(self.model.model.device)
                 bos = torch.cat([bos] * len(tokens_), dim=0)
                 tokens_ = torch.cat([bos, tokens_], dim=1).type(tokens_.dtype)
                 scores += -np.stack(self._get_perplexity(tokens_[:, :1], tokens_))
@@ -226,16 +226,16 @@ class BeastAttack:
             tokens: List of tokens
         """
         if suffix_ids is not None:
-            suffix_str = self.generator.tokenizer.decode(suffix_ids)
+            suffix_str = self.model.tokenizer.decode(suffix_ids)
         else:
             suffix_str = ""
         formatted_input = self._format_chat(prompt + suffix_str)
-        input_ids = self.generator.tokenizer(
+        input_ids = self.model.tokenizer(
             formatted_input, return_tensors="pt", add_special_tokens=False
-        ).input_ids.to(self.generator.model.device)
-        output = self.generator.model(input_ids)
+        ).input_ids.to(self.model.model.device)
+        output = self.model.model(input_ids)
         logits = output.logits[:, -1, :]
-        temp = self.generator.generation_config.temperature
+        temp = self.model.generation_config.temperature
         probs = torch.softmax(logits / temp, dim=-1).float()
         tokens = torch.multinomial(probs, k, replacement=False)
         return tokens[0].tolist()
@@ -339,7 +339,7 @@ class BeastAttack:
 
             for _ in range(trials):
                 best_candidate, score = self._get_best_candidate(
-                    self.generator,
+                    self.model,
                     prompt,
                     response,
                     k1,
@@ -351,13 +351,13 @@ class BeastAttack:
 
                 if target:
                     result, response = self._evaluate_target(
-                        self.generator, prompt, best_candidate, target
+                        self.model, prompt, best_candidate, target
                     )
                 else:
-                    result, response = self._evaluate(self.generator, prompt, best_candidate)
+                    result, response = self._evaluate(self.model, prompt, best_candidate)
 
                 if result:
-                    jailbreak_str = self.generator.tokenizer.decode(best_candidate)
+                    jailbreak_str = self.model.tokenizer.decode(best_candidate)
                     logging.info("BEAST found a likely successful jailbreak")
                     suffixes.append(jailbreak_str)
 
