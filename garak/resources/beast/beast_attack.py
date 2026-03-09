@@ -84,7 +84,7 @@ class BeastAttack:
             {"role": "user", "content": {"text": input_str}}
         ])
         
-        outputs = self.model.generate(conv)
+        outputs = self.generate(conv)
         result = _check_jailbreak(outputs)
         return result, outputs[0]
 
@@ -97,7 +97,7 @@ class BeastAttack:
             {"role": "user", "content": {"text": input_str}}
         ])
         
-        outputs = self.model.generate(conv)
+        outputs = self.generate(conv)
         for output in outputs:
             if target in output:
                 result = True
