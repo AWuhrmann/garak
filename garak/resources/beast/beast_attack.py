@@ -292,6 +292,7 @@ class BeastAttack:
                 best_score = candidate_score
                 best_suffix = best_candidate
             print(best_score)
+            print()
 
             if stop_early:
                 success = self._evaluate(prompt, best_candidate)
