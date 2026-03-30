@@ -357,10 +357,9 @@ class BeastAttack:
                 )
 
                 if target:
-                    result, response = self._evaluate_target(prompt, best_candidate, target
-                    )
+                    result, _ = self._evaluate_target(prompt, best_candidate, target)
                 else:
-                    result, response = self._evaluate(prompt, best_candidate)
+                    result, _ = self._evaluate(prompt, best_candidate)
 
                 if result:
                     jailbreak_str = self.tokenizer.decode(best_candidate)
