@@ -165,7 +165,6 @@ class BeastAttack:
             Negative perplexity for each candidate (higher = better)
         """
         scores = np.zeros(len(candidates))
-        softmax = torch.nn.Softmax(dim=-1)
         gen_len = gen_prompt_ids.shape[1]
         target_len = target_ids.shape[1]
 
@@ -178,13 +177,11 @@ class BeastAttack:
 
             # All candidates at the same step have the same length, so no padding needed
             cand_tensor = torch.tensor(batch, dtype=torch.long, device=self.model.device)
-            gen_p = gen_prompt_ids.expand(bs, -1)
-            target = target_ids.expand(bs, -1)
-
-            # Scoring input: [prompt + suffix] + [gen_prompt] + [target]
-            # Perplexity is measured only over the target portion
-            scoring_input = torch.cat([cand_tensor, gen_p, target], dim=1)
+            scoring_input = torch.cat(
+                [cand_tensor, gen_prompt_ids.expand(bs, -1), target_ids.expand(bs, -1)], dim=1
+            )
             context_len = cand_tensor.shape[1] + gen_len
+            del cand_tensor
 
             output = self.model(
                 input_ids=scoring_input,
@@ -195,17 +192,26 @@ class BeastAttack:
                 return_dict=True,
             )
 
-            logs = None
-            for curr_pos in range(context_len, context_len + target_len):
-                log = -torch.log(
-                    softmax(output.logits)[
-                        torch.arange(bs, device=self.model.device),
-                        curr_pos - 1,
-                        scoring_input[:, curr_pos],
-                    ]
-                )
-                logs = log if logs is None else logs + log
+            # Slice only the target positions before freeing the full logits tensor.
+            # logit at position i predicts token i+1, so target tokens at
+            # [context_len, context_len+target_len) correspond to logits at
+            # [context_len-1, context_len+target_len-1).
+            # .contiguous().float() ensures an independent copy so del output
+            # actually releases the full [bs, full_seq_len, vocab] allocation.
+            target_logits = output.logits[
+                :, context_len - 1 : context_len + target_len - 1, :
+            ].contiguous().float()  # [bs, target_len, vocab]
+            target_tokens = scoring_input[:, context_len : context_len + target_len]  # [bs, target_len]
+            del output, scoring_input
 
+            # Vectorised log-prob computation -- no per-position loop, no repeated
+            # full-vocab softmax allocation
+            log_probs = torch.nn.functional.log_softmax(target_logits, dim=-1)
+            del target_logits
+            gathered = log_probs.gather(2, target_tokens.unsqueeze(2)).squeeze(2)  # [bs, target_len]
+            del log_probs, target_tokens
+
+            logs = -gathered.sum(dim=-1)  # [bs]
             perplexity = torch.exp(logs / target_len).detach().cpu().float().numpy()
             scores[b : b + bs] = -perplexity
 
@@ -298,8 +304,12 @@ class BeastAttack:
             # Batched sampling: one forward pass for all k1 beams
             beam_tensor = torch.tensor(beams, dtype=torch.long, device=self.model.device)
             output = self.model(input_ids=beam_tensor)
-            probs = torch.softmax(output.logits[:, -1, :] / temp, dim=-1).float()
+            last_logits = output.logits[:, -1, :].contiguous().float()  # [k1, vocab]
+            del output, beam_tensor
+            probs = torch.softmax(last_logits / temp, dim=-1)
+            del last_logits
             next_tokens = self._sample_top_p(probs, top_p, k2)  # [k1, k2]
+            del probs
 
             # Expand to k1 * k2 candidates
             candidates = [
