@@ -223,8 +223,8 @@ class BeastAttack:
         stop_early: bool = False,
         max_bs: int = 50,
         top_p: float = 1.0,
-    ) -> tuple[list[int], float]:
-        """Return the best candidate suffix and its associated score.
+    ) -> tuple[list[list[int]], list[float]]:
+        """Return the pool of best candidate suffixes and their scores.
 
         Follows the reference implementation structure:
         - Beams store full token sequences (prompt + suffix) to avoid re-encoding
@@ -288,8 +288,11 @@ class BeastAttack:
         # This avoids re-encoding the prompt on every forward pass
         beams = [start_ids[0].tolist() + [tok] for tok in initial_tokens]
 
-        best_score = -float("inf")
-        best_suffix = []
+        # Pool maintains the k1 globally best candidates seen across all steps,
+        # matching the reference's best_prompts / best_scores accumulation.
+        # Starts with k1 placeholder entries at -inf so real candidates always win.
+        pool_seqs = [[] for _ in range(k1)]
+        pool_scores = [-float("inf")] * k1
 
         for i in tqdm(range(suffix_len), leave=False):
             # Batched sampling: one forward pass for all k1 beams
@@ -312,12 +315,16 @@ class BeastAttack:
             sorted_idx = np.argsort(scores)[::-1]
             beams = [candidates[j] for j in sorted_idx[:k1]]
 
-            best_candidate_idx = sorted_idx[0]
-            candidate_score = scores[best_candidate_idx]
-            if candidate_score > best_score:
-                best_score = candidate_score
-                best_suffix = candidates[best_candidate_idx][suffix_start:]
+            # Merge this step's top-k1 into the pool, then prune back to k1.
+            # np.argsort returns ascending order so the last k1 are the best.
+            merged_seqs = pool_seqs + beams
+            merged_scores = pool_scores + [scores[j] for j in sorted_idx[:k1]]
+            top_idx = np.argsort(merged_scores)[-k1:]
+            pool_seqs = [merged_seqs[j] for j in top_idx]
+            pool_scores = [merged_scores[j] for j in top_idx]
 
+            best_score = pool_scores[-1]  # highest score (last after ascending argsort)
+            best_suffix = pool_seqs[-1][suffix_start:]
             print(f"[BEAST] step {i+1}/{suffix_len}  score={best_score:.4f}  suffix={self.tokenizer.decode(best_suffix)!r}")
 
             if stop_early:
@@ -325,7 +332,8 @@ class BeastAttack:
                 if result:
                     break
 
-        return best_suffix, best_score
+        pool_suffixes = [seq[suffix_start:] for seq in pool_seqs]
+        return pool_suffixes, pool_scores
 
     def run(
         self,
@@ -366,12 +374,13 @@ class BeastAttack:
             position=0,
             desc="BEAST attack",
         ):
+            # Seed for the first trial; updated to the best pool candidate after each trial
             best_candidate = []
             if trials > 1:
                 pbar = tqdm(total=trials, leave=False)
 
             for _ in range(trials):
-                best_candidate, score = self._get_best_candidate(
+                pool_candidates, pool_scores = self._get_best_candidate(
                     prompt,
                     response,
                     k1,
@@ -383,15 +392,19 @@ class BeastAttack:
                     top_p,
                 )
 
-                if target:
-                    result, _ = self._evaluate_target(prompt, best_candidate, target)
-                else:
-                    result, _ = self._evaluate(prompt, best_candidate)
+                # Seed the next trial from the best pool candidate
+                best_candidate = pool_candidates[int(np.argmax(pool_scores))]
 
-                if result:
-                    jailbreak_str = self.tokenizer.decode(best_candidate)
-                    logging.info("BEAST found a likely successful jailbreak")
-                    suffixes.append(jailbreak_str)
+                # Evaluate every pool candidate; collect all successful jailbreaks
+                for candidate in pool_candidates:
+                    if target:
+                        result, _ = self._evaluate_target(prompt, candidate, target)
+                    else:
+                        result, _ = self._evaluate(prompt, candidate)
+                    if result:
+                        jailbreak_str = self.tokenizer.decode(candidate)
+                        logging.info("BEAST found a likely successful jailbreak")
+                        suffixes.append(jailbreak_str)
 
                 if trials > 1:
                     pbar.update(1)
