@@ -90,6 +90,29 @@ class BeastAttack:
             formatted, return_tensors="pt", add_special_tokens=False
         ).to(self.model.device)
 
+    def _sample_top_p(self, probs: torch.Tensor, top_p: float, k: int) -> torch.Tensor:
+        """Top-p (nucleus) sampling.
+
+        Filters to the smallest set of tokens whose cumulative probability
+        mass exceeds top_p, re-normalises, then samples k tokens from that set.
+        Matches the reference implementation's sample_top_p helper.
+
+        Args:
+            probs: Token probabilities [batch, vocab] (should already be softmaxed)
+            top_p: Cumulative probability threshold. 1.0 = no filtering.
+            k: Number of tokens to sample per row
+        Returns:
+            Sampled token indices [batch, k]
+        """
+        probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
+        probs_cum = torch.cumsum(probs_sort, dim=-1)
+        # Shift cumsum by one so the token that crosses the threshold is kept
+        mask = probs_cum - probs_sort > top_p
+        probs_sort[mask] = 0.0
+        probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
+        tokens = torch.multinomial(probs_sort, k, replacement=False)
+        return torch.gather(probs_idx, -1, tokens)
+
     @torch.no_grad()
     def _evaluate(self, prompt, candidate):
         candidate_str = self.tokenizer.decode(candidate)
@@ -199,6 +222,7 @@ class BeastAttack:
         suffix_ids: Union[list[int], torch.Tensor, None] = None,
         stop_early: bool = False,
         max_bs: int = 50,
+        top_p: float = 1.0,
     ) -> tuple[list[int], float]:
         """Return the best candidate suffix and its associated score.
 
@@ -218,6 +242,7 @@ class BeastAttack:
             suffix_ids: Adversarial suffix token ids from a previous trial
             stop_early: Whether to stop if a successful jailbreak is found
             max_bs: Maximum batch size for scoring forward passes
+            top_p: Top-p sampling threshold (1.0 = no filtering)
 
         Returns:
             best_suffix: The best performing adversarial suffix token ids
@@ -257,7 +282,7 @@ class BeastAttack:
         # Sample k1 initial tokens from the starting context (user-message space)
         output = self.model(input_ids=start_ids)
         probs = torch.softmax(output.logits[:, -1, :] / temp, dim=-1).float()
-        initial_tokens = torch.multinomial(probs, k1, replacement=False)[0].tolist()
+        initial_tokens = self._sample_top_p(probs, top_p, k1)[0].tolist()
 
         # Each beam is a full token sequence: [prompt_tokens + suffix_tokens_so_far]
         # This avoids re-encoding the prompt on every forward pass
@@ -271,7 +296,7 @@ class BeastAttack:
             beam_tensor = torch.tensor(beams, dtype=torch.long, device=self.model.device)
             output = self.model(input_ids=beam_tensor)
             probs = torch.softmax(output.logits[:, -1, :] / temp, dim=-1).float()
-            next_tokens = torch.multinomial(probs, k2, replacement=False)  # [k1, k2]
+            next_tokens = self._sample_top_p(probs, top_p, k2)  # [k1, k2]
 
             # Expand to k1 * k2 candidates
             candidates = [
@@ -293,10 +318,7 @@ class BeastAttack:
                 best_score = candidate_score
                 best_suffix = candidates[best_candidate_idx][suffix_start:]
 
-            logging.debug(
-                "Step %d/%d score=%.4f suffix=%s",
-                i + 1, suffix_len, best_score, self.tokenizer.decode(best_suffix),
-            )
+            print(f"[BEAST] step {i+1}/{suffix_len}  score={best_score:.4f}  suffix={self.tokenizer.decode(best_suffix)!r}")
 
             if stop_early:
                 result, _ = self._evaluate(prompt, best_suffix)
@@ -316,6 +338,7 @@ class BeastAttack:
         target: Optional[str] = "",
         stop_early: bool = False,
         max_bs: int = 50,
+        top_p: float = 1.0,
     ) -> list[str]:
         """
         Args:
@@ -328,6 +351,7 @@ class BeastAttack:
             target: Target output string
             stop_early: Whether to stop if a successful jailbreak is found
             max_bs: Maximum batch size for scoring forward passes
+            top_p: Top-p sampling threshold (1.0 = no filtering)
 
         Returns:
             suffixes: Adversarial suffixes as strings
@@ -356,6 +380,7 @@ class BeastAttack:
                     best_candidate,
                     stop_early,
                     max_bs,
+                    top_p,
                 )
 
                 if target:
@@ -387,6 +412,7 @@ def run_beast(
     outfile: Path = beast_resource_data / "suffixes.txt",
     stop_early: bool = False,
     max_bs: int = 50,
+    top_p: float = 1.0,
 ) -> Union[list[str], None]:
     """Function to run BEAST attack
 
@@ -402,6 +428,7 @@ def run_beast(
         target (str): Target output phrase (optional)
         stop_early (bool): Whether to stop if a successful jailbreak is found
         max_bs (int): Maximum batch size for scoring forward passes
+        top_p (float): Top-p sampling threshold (1.0 = no filtering)
 
     Returns:
         suffixes (list[str]): List of adversarial suffixes as strings
@@ -424,6 +451,7 @@ def run_beast(
         target=target,
         stop_early=stop_early,
         max_bs=max_bs,
+        top_p=top_p,
     )
 
     if suffixes and outfile:
