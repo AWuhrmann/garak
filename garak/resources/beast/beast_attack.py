@@ -393,18 +393,21 @@ class BeastAttack:
                 )
 
                 # Seed the next trial from the best pool candidate
-                best_candidate = pool_candidates[int(np.argmax(pool_scores))]
+                best_idx = int(np.argmax(pool_scores))
+                best_candidate = pool_candidates[best_idx]
 
-                # Evaluate every pool candidate; collect all successful jailbreaks
+                # Evaluate every pool candidate and log jailbreak successes.
+                # Suffixes are always collected regardless of jailbreak outcome so
+                # the optimization result is never silently discarded.
                 for candidate in pool_candidates:
                     if target:
                         result, _ = self._evaluate_target(prompt, candidate, target)
                     else:
                         result, _ = self._evaluate(prompt, candidate)
+                    candidate_str = self.tokenizer.decode(candidate)
                     if result:
-                        jailbreak_str = self.tokenizer.decode(candidate)
-                        logging.info("BEAST found a likely successful jailbreak")
-                        suffixes.append(jailbreak_str)
+                        logging.info("BEAST found a likely successful jailbreak: %s", candidate_str)
+                    suffixes.append(candidate_str)
 
                 if trials > 1:
                     pbar.update(1)
@@ -467,11 +470,10 @@ def run_beast(
         top_p=top_p,
     )
 
-    if suffixes and outfile:
+    if outfile and suffixes:
         outfile.parent.mkdir(mode=0o740, parents=True, exist_ok=True)
         with open(outfile, "a") as f:
             for suffix in suffixes:
                 f.write(f"{suffix}\n")
-        return suffixes
-    else:
-        return None
+
+    return suffixes or None
